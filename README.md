@@ -1,0 +1,13 @@
+# Fix Logs - 修复日志合集
+
+日常开发中遇到的各类软件 Bug 修复记录。记录问题现象、排查过程和解决方案，方便自己回顾，也希望能帮到遇到同样问题的人。
+
+## 日志索引
+
+| 日期 | 问题 | 文件 |
+|------|------|------|
+| 2026-02-26 | Antigravity IDE Agent 执行命令卡在 "checking command status" | [查看](./2026-02-26-antigravity-shell-integration-fix.md) |
+
+## 关键词
+
+Antigravity, Google Antigravity IDE, VS Code, Shell Integration, terminal stuck, check command status, PROMPT_COMMAND, conda, ROS, bash, agent command execution hang
