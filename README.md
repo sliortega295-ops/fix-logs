@@ -11,4 +11,4 @@
 
 ## 关键词
 
-Antigravity, Google Antigravity IDE, VS Code, Shell Integration, terminal stuck, check command status, PROMPT_COMMAND, conda, ROS, bash, agent command execution hang, Clash Verge, clash-verge-rev, clash-verge-service, IPC path not ready, TUN mode, 虚拟网卡, systemd, ExecStart, socket permission, Linux upgrade
+Antigravity, Google Antigravity IDE, VS Code, Shell Integration, terminal stuck, check command status, PROMPT_COMMAND, conda, ROS, bash, agent command execution hang, Clash Verge, clash-verge-rev, clash-verge-service, IPC path not ready, TUN mode, 虚拟网卡, systemd, ExecStart, socket permission, Linux upgrade, device or resource busy, Group=lyy, sidecar mode, service mode

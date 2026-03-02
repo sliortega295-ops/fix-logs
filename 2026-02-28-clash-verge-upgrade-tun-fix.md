@@ -64,6 +64,8 @@ cat /etc/systemd/system/clash-verge-service.service
 
 ### 修复 2: 重写 Service 文件（解决路径 + 权限问题）
 
+最终稳定版本（`Group=lyy` 比 chmod 777 更安全可靠）：
+
 ```bash
 sudo tee /etc/systemd/system/clash-verge-service.service << 'EOF'
 [Unit]
@@ -75,9 +77,9 @@ Type=simple
 ExecStartPre=/bin/mkdir -p /tmp/verge
 ExecStartPre=/bin/chmod 777 /tmp/verge
 ExecStart=/usr/bin/clash-verge-service
+Group=lyy
 Restart=always
 RestartSec=5
-UMask=0000
 
 [Install]
 WantedBy=multi-user.target
@@ -90,9 +92,11 @@ EOF
 |----|------|
 | `ExecStart` | 更正为新版路径 `/usr/bin/clash-verge-service` |
 | `ExecStartPre` (mkdir) | 确保 `/tmp/verge` 目录在服务启动前存在 |
-| `ExecStartPre` (chmod) | 设置目录权限为 777，让普通用户 GUI 可以访问 IPC socket |
-| `UMask=0000` | 让服务创建的 socket 文件默认权限为 666（所有用户可读写） |
+| `ExecStartPre` (chmod) | 设置目录权限为 777，让普通用户 GUI 可以访问 |
+| `Group=lyy` | **核心**：service 以 root 用户 + lyy 组运行，创建的 socket 归组 lyy，GUI 天然可读写，无需 chmod socket |
 | `WantedBy=multi-user.target` | 确保开机自启 |
+
+> **注意**: `Group=lyy` 需替换为你自己的用户名。可用 `id -gn` 查看。
 
 ### 修复 3: 创建 tmpfiles.d 规则（可选，持久化权限）
 
@@ -116,14 +120,18 @@ sudo systemctl start clash-verge-service
 systemctl status clash-verge-service
 # 期望: Active: active (running)
 
-# 验证 socket 权限
+# 验证 socket 权限（Group 应为你的用户名）
 ls -la /tmp/verge/
-# 期望: drwxrwsrwx ... /tmp/verge/
-# 期望: srw-rw-rw- ... clash-verge-service.sock
+# 期望: drwxrws---  root lyy  ... /tmp/verge/
+# 期望: srw-rw----  root lyy  ... clash-verge-service.sock
 
 # 验证 TUN 接口
 ip link show | grep Meta
 # 期望: Meta: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP>
+
+# 验证路由
+ip route | grep Meta
+# 期望: 198.18.0.0/30 dev Meta proto kernel scope link src 198.18.0.1
 
 # 验证网络连通性
 curl -s -o /dev/null -w "%{http_code}" https://www.google.com
@@ -152,9 +160,138 @@ IPC path not ready
           └─ 修正为 /usr/bin/clash-verge-service
               └─ 服务启动成功，但 GUI 仍连不上
                   └─ /tmp/verge/ 权限 700 root:root，普通用户无法访问
-                      └─ 添加 ExecStartPre chmod + UMask=0000
+                      └─ Service 文件加 Group=lyy，socket 归组用户
                           └─ GUI 连接 service 成功
                               └─ TUN 模式正常，网络连通
+
+TUN 开启后无法上网
+  └─ service 日志: "Start TUN listening error: device or resource busy"
+      └─ 旧 TUN 接口 Meta 残留未释放
+          └─ sudo ip link delete Meta 清除残留
+              └─ GUI 关闭再开启 TUN（单次操作，不要连点）
+                  └─ TUN 正常，路由恢复，网络连通
+```
+
+---
+
+## 常见故障速查表
+
+| 现象 | 原因 | 快速修复 |
+|------|------|----------|
+| IPC path not ready | service 未启动或 socket 权限不对 | `sudo systemctl restart clash-verge-service` |
+| Failed to apply config: os error 2 | GUI 在 sidecar 模式，未连上 service | GUI 设置 → 安装服务 |
+| TUN: device or resource busy | 旧 TUN 接口残留 | `sudo ip link delete Meta` 后重新开启 TUN |
+| TUN 开启后 DNS 超时 / 无法上网 | TUN 路由表未正确注入 | 同上，清除残留后重新开启 |
+| GUI 显示 sidecar 模式 | service 启动时 socket 权限不对 | 检查 service 文件有 `Group=lyy` |
+
+---
+
+## 正常工作状态快照（2026-03-02）
+
+以下是修复完成后 TUN 正常工作时各项配置的基准值，可作为日后排障对照：
+
+### systemd Service 文件
+
+```ini
+# /etc/systemd/system/clash-verge-service.service
+[Unit]
+Description=Clash Verge Service helps to launch Clash Core.
+After=network-online.target nftables.service iptables.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /tmp/verge
+ExecStartPre=/bin/chmod 777 /tmp/verge
+ExecStart=/usr/bin/clash-verge-service
+Group=lyy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### tmpfiles.d 规则
+
+```
+# /etc/tmpfiles.d/clash-verge.conf
+d /tmp/verge 0777 root root -
+```
+
+### Socket 权限（正确状态）
+
+```
+/tmp/verge/
+  drwxrws---  root lyy   clash-verge-service.sock
+  srw-rw----  root lyy   clash-verge-service.sock
+  srw-rw-rw-  root lyy   verge-mihomo.sock
+```
+
+> 关键：socket 归组 `lyy`，GUI 以 lyy 用户运行可直接读写。
+
+### TUN 接口（正确状态）
+
+```bash
+$ ip link show Meta
+Meta: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN
+
+$ ip route | grep Meta
+198.18.0.0/30 dev Meta proto kernel scope link src 198.18.0.1
+```
+
+### DNS（正确状态）
+
+```bash
+$ nslookup google.com
+Server:         127.0.0.53
+Name:   google.com
+Address: 198.18.0.x    # fake-ip 模式，正常
+```
+
+### mihomo 核心配置（config.yaml）
+
+```yaml
+redir-port: 7895
+tproxy-port: 7896
+mixed-port: 7897
+socks-port: 7898
+port: 7899
+log-level: info
+allow-lan: false
+mode: rule
+external-controller: 127.0.0.1:9097
+tun:
+  stack: gvisor
+  device: Meta
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+  - any:53
+  strict-route: false
+  mtu: 1500
+ipv6: true
+external-controller-unix: /tmp/verge/verge-mihomo.sock
+unified-delay: true
+```
+
+### GUI 日志关键行（service 模式正常连接）
+
+```
+[Service] 正在尝试通过服务启动核心
+[Service] 服务就绪，直接启动
+[Service] 服务已运行且版本匹配，直接使用
+[Service] 尝试使用现有服务启动核心
+[Service] 服务成功启动核心
+```
+
+> 如果看到 `Starting core in sidecar mode` 说明没连上 service，需要在 GUI 里点击安装服务。
+
+### 网络连通性基准
+
+```
+Google:  200  ~1.0s
+GitHub:  301  ~0.8s  (正常跳转)
+YouTube: 200  ~1.9s
 ```
 
 ---
